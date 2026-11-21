@@ -11,7 +11,7 @@ st.sidebar.header("📁 数据上传与管理")
 # 1. 上传主数据表（只在上传时处理）
 uploaded_main = st.sidebar.file_uploader("1. 上传主数据表 (原始Excel文件)", type=["xlsx", "xls"])
 if uploaded_main:
-    st.session_state['main_df'] = pd.read_excel(uploaded_main, header=[0, 1])
+    st.session_state['main_df'] = pd.read_excel(uploaded_main, header=[0, 1], engine='xlrd')
     st.sidebar.success("✅ 主数据已加载")
 
 # 2. 上传11月更新表
@@ -56,7 +56,7 @@ if 'main_df' in st.session_state:
     
     # ================= 处理11月数据更新 =================
     if uploaded_nov:
-        nov_df = pd.read_excel(uploaded_nov)
+        nov_df = pd.read_excel(uploaded_nov, engine='xlrd')
         if 'Asin' in nov_df.columns and '11月' in nov_df.columns:
             # 合并更新 11月 销量
             nov_df = nov_df[['Asin', '11月']].rename(columns={'11月': '最新的11月销量'})
