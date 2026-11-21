@@ -8,11 +8,10 @@ st.title("🎄 亚马逊圣诞产品备货与销售进度看板")
 # ================= 侧边栏：数据上传 =================
 st.sidebar.header("📁 数据上传与管理")
 
-# 1. 上传主数据表（为了兼容性，强制指定读取第一个Sheet，并处理双层表头）
+# 1. 上传主数据表
 uploaded_main = st.sidebar.file_uploader("1. 上传主数据表 (必须是 .xlsx 格式)", type=["xlsx"])
 if uploaded_main:
     try:
-        # 读取文件
         df_raw = pd.read_excel(uploaded_main, header=[0, 1])
         
         # 展平双层表头，并清理换行和空格
@@ -22,6 +21,7 @@ if uploaded_main:
         new_columns = {}
         for col in df_raw.columns:
             c_lower = col.lower()
+            # 确保 '销售' 不会误匹配到 '销售员'、'总销售额' 等
             if '总备货' in c_lower:
                 new_columns[col] = '总备货'
             elif '剩余库存' in c_lower:
@@ -38,15 +38,17 @@ if uploaded_main:
                 new_columns[col] = '品类'
             elif '新旧品' in c_lower:
                 new_columns[col] = '新旧品'
-            elif '销售' in c_lower and '账号' not in c_lower:
+            elif '销售' in c_lower and '账号' not in c_lower and len(col) < 15: # 加上长度限制防止误判
                 new_columns[col] = '销售'
         
         # 执行重命名
         df = df_raw.rename(columns=new_columns)
         
-        # 保留需要的核心列，防止后续报错
+        # 🚨 关键防错：如果有多个列被映射成了相同的名字，只保留第一个
+        df = df.loc[:, ~df.columns.duplicated()]
+        
+        # 保留需要的核心列
         needed_cols = ['销售', 'SKU', '中文名称', 'Asin', '品类', '新旧品', '总备货', '剩余库存', '11月销量']
-        # 只保留实际存在的列
         existing_cols = [c for c in needed_cols if c in df.columns]
         df = df[existing_cols].copy()
         
@@ -61,7 +63,6 @@ uploaded_nov = st.sidebar.file_uploader("2. 上传11月实时销量表 (可选)"
 if uploaded_nov and 'main_df' in st.session_state:
     try:
         nov_df = pd.read_excel(uploaded_nov)
-        # 标准化11月表格的列名
         nov_df.columns = [str(c).strip() for c in nov_df.columns]
         
         if 'Asin' in nov_df.columns and '11月' in nov_df.columns:
@@ -80,7 +81,7 @@ if uploaded_nov and 'main_df' in st.session_state:
 if 'main_df' in st.session_state:
     df = st.session_state['main_df'].copy()
     
-    # 数据清洗：确保数值列是数字类型，遇到空值或文本(如"/")转为0
+    # 数据清洗：确保数值列是数字类型
     for col in ['总备货', '剩余库存', '11月销量']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
@@ -90,13 +91,22 @@ if 'main_df' in st.session_state:
         if col in df.columns:
             df[col] = df[col].fillna('未知')
             
-    # ================= 筛选逻辑 =================
+    # ================= 筛选逻辑（修复版） =================
     st.sidebar.markdown("---")
     st.sidebar.header("🎯 多维数据筛选")
     
-    sales_list = ["全部"] + list(df['销售'].unique()) if '销售' in df.columns else ["全部"]
-    category_list = ["全部"] + list(df['品类'].unique()) if '品类' in df.columns else ["全部"]
-    condition_list = ["全部"] + list(df['新旧品'].unique()) if '新旧品' in df.columns else ["全部"]
+    # 定义一个安全获取下拉列表的函数
+    def get_options(df, column_name):
+        if column_name in df.columns:
+            vals = df[column_name].dropna().unique()
+            # 过滤掉空字符串和异常值，并转成字符串排序
+            clean_vals = [str(v) for v in vals if str(v).strip() not in ['', 'nan', 'None']]
+            return ["全部"] + sorted(clean_vals)
+        return ["全部"]
+
+    sales_list = get_options(df, '销售')
+    category_list = get_options(df, '品类')
+    condition_list = get_options(df, '新旧品')
 
     sel_sales = st.sidebar.selectbox("销售员", sales_list)
     sel_category = st.sidebar.selectbox("品类", category_list)
@@ -104,11 +114,11 @@ if 'main_df' in st.session_state:
 
     filtered_df = df.copy()
     if sel_sales != "全部" and '销售' in df.columns:
-        filtered_df = filtered_df[filtered_df['销售'] == sel_sales]
+        filtered_df = filtered_df[filtered_df['销售'].astype(str) == sel_sales]
     if sel_category != "全部" and '品类' in df.columns:
-        filtered_df = filtered_df[filtered_df['品类'] == sel_category]
+        filtered_df = filtered_df[filtered_df['品类'].astype(str) == sel_category]
     if sel_condition != "全部" and '新旧品' in df.columns:
-        filtered_df = filtered_df[filtered_df['新旧品'] == sel_condition]
+        filtered_df = filtered_df[filtered_df['新旧品'].astype(str) == sel_condition]
 
     # ================= 核心指标计算 =================
     total_inv = filtered_df['总备货'].sum() if '总备货' in filtered_df.columns else 0
@@ -124,7 +134,7 @@ if 'main_df' in st.session_state:
     col4.metric("📈 整体售出率进度", f"{calc_rate:.1f}%")
     
     if total_inv == 0:
-        st.warning("⚠️ 当前筛选条件下总备货为 0，可能是该维度下没有数据，或列名未正确识别。请尝试点击左侧的『全部』进行查看。")
+        st.warning("⚠️ 当前筛选条件下总备货为 0，可能是该维度下没有数据，或者 Excel 表格里真的没有数字。")
     
     st.markdown("---")
 
@@ -162,7 +172,6 @@ if 'main_df' in st.session_state:
         # 计算单SKU售出率
         if '总备货' in display_df.columns and '剩余库存' in display_df.columns:
              display_df['单SKU售出率(%)'] = ((display_df['总备货'] - display_df['剩余库存']) / display_df['总备货'].replace(0, 1) * 100).round(1)
-             # 重新排列列顺序，把售出率放在显眼位置
              cols = list(display_df.columns)
              if '单SKU售出率(%)' in cols:
                  cols.insert(5, cols.pop(cols.index('单SKU售出率(%)')))
